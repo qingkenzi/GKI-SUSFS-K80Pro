@@ -1,0 +1,14 @@
+run: 39971742387
+
+## 所有 apk
+dl/Manager-gradle/SukiSU_v4.2.1-r1_41055-release.apk
+dl/Manager/SukiSU_v4.2.1-r1_41055-release.apk
+dl/Manager-spoofed/SukiSU_v4.2.1-r1_41055-release-spoofed.apk
+dl/Manager-spoofed-gradle/SukiSU_v4.2.1-r1_41055-release.apk
+
+## out
+total 34596
+-rw-r--r-- 1 runner runner 18166181 Oct 23 15:35 manager-spoofed.apk
+-rw-r--r-- 1 runner runner 17245664 Oct 23 15:35 manager-spoofed.apk.xz
+-rw-r--r-- 1 runner runner      123 Oct 23 15:35 manager-spoofed.sha256
+-rw-r--r-- 1 runner runner      262 Oct 23 15:35 manifest.txt
