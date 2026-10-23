@@ -1144,12 +1144,11 @@ jobs:
         if: inputs.use_zram
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          echo "升级 LZ4..."
-          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
-
-          cp -r $ZZH_PATCHES/zram/lz4/* ./lib/lz4/
-          cp -r $ZZH_PATCHES/zram/include/linux/* ./include/linux/
-          bash $ZZH_PATCHES/zram/apply_lz4_neon.sh
+          # [K80Pro-fix] 跳过 "zram LZ4 补丁栈": 不替换 lib/lz4/*、不打 ARMv8 NEON 加速。
+          # 原因: 该替换会让 lib/decompress_unlz4.c(initramfs 解压) 走新实现,
+          #       而本机 init_boot 的 ramdisk 是 lz4_legacy 格式 -> 开机解压失败 -> 卡 Mi logo。
+          # 保留 lz4k / lz4kd / lz4k_oplus 算法本体, 这些只新增 zram 可用算法, 不影响解压路径。
+          echo "跳过 ZZH lz4 替换与 NEON 加速（K80Pro 兼容性修复）"
 
           if [ -f "fs/f2fs/Makefile" ] && ! grep -qF "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" "fs/f2fs/Makefile"; then
             echo "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" >> "fs/f2fs/Makefile"
