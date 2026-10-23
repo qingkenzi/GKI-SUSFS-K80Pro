@@ -1,0 +1,67 @@
+name: deliver-artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "source run id"
+        required: true
+jobs:
+  deliver:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - name: download artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh run download "${{ inputs.run_id }}" -R "$GITHUB_REPOSITORY" -D dl || {
+             echo "gh download failed, fallback to API"; }
+          du -sh dl || true
+          find dl -maxdepth 3 | head -60
+      - name: stage
+        run: |
+          set -euo pipefail
+          mkdir -p delivery
+          AK=$(find dl -name "*AnyKernel3*.zip" | head -1 || true)
+          echo "AK=[$AK]"
+          if [ -n "${AK:-}" ]; then
+            unzip -o "$AK" -d ak >/dev/null
+          fi
+          ls -l ak 2>/dev/null || true
+          if [ -f ak/Image ]; then
+            xz -9e -T0 -c ak/Image > delivery/Image.xz
+            sha256sum ak/Image > delivery/Image.sha256
+            stat -c '%n %s' ak/Image >> delivery/Image.sha256
+          fi
+          [ -f ak/tools/magiskboot ] && cp ak/tools/magiskboot delivery/magiskboot || true
+          find dl -name "*.zip" -size -20M -exec cp {} delivery/ \; || true
+          {
+            echo "run: ${{ inputs.run_id }}"
+            echo "commit: $(git rev-parse HEAD)"
+            echo
+            echo "## delivery"; ls -l delivery
+            echo; echo "## ak tree"; ls -lR ak 2>/dev/null | head -80
+            echo; echo "## downloaded tree"; find dl -maxdepth 4 | head -120
+          } > delivery/manifest.txt
+          cat delivery/manifest.txt
+      - name: push to delivery branch
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          cp -a delivery/. "$RUNNER_TEMP/out/"
+          git config user.name "artifact-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git checkout --orphan delivery
+          git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p delivery
+          cp -a "$RUNNER_TEMP/out/." delivery/
+          git add -A delivery
+          git commit -m "artifacts from run ${{ inputs.run_id }}"
+          git push -f origin HEAD:refs/heads/delivery
