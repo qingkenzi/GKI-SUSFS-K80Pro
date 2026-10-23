@@ -1,0 +1,56 @@
+name: deliver-manager
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "source build run id"
+        required: true
+jobs:
+  deliver:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - name: download manager artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NAME=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.run_id }}/artifacts" \
+            | python3 -c "import sys,json;print([a['name'] for a in json.load(sys.stdin)['artifacts'] if a['name'].startswith('SukiSU-Manager')][0])")
+          echo "artifact: $NAME"
+          gh run download "${{ inputs.run_id }}" -R "$GITHUB_REPOSITORY" -D dl -n "$NAME"
+          find dl -name "*.apk"
+      - name: stage
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          APK=$(find dl -path "*Manager-spoofed/*" -name "*.apk" | head -1)
+          [ -n "$APK" ] || { echo "!! 未找到 spoofed APK"; find dl -name "*.apk"; exit 1; }
+          echo "picked: $APK"
+          cp "$APK" out/manager-spoofed.apk
+          xz -9e -T0 -c out/manager-spoofed.apk > out/manager-spoofed.apk.xz
+          sha256sum out/manager-spoofed.apk | tee out/manager-spoofed.sha256
+          stat -c '%n %s' out/manager-spoofed.apk >> out/manager-spoofed.sha256
+          { echo "run: ${{ inputs.run_id }}"; echo; echo "## 所有 apk"; find dl -name "*.apk"; echo; echo "## out"; ls -l out; } > out/manifest.txt
+          cat out/manifest.txt
+      - name: push to manager branch
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out2"
+          cp -a out/. "$RUNNER_TEMP/out2/"
+          git config user.name "artifact-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git checkout --orphan manager
+          git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p manager
+          cp -a "$RUNNER_TEMP/out2/." manager/
+          git add -A manager
+          git commit -m "manager artifact from run ${{ inputs.run_id }}"
+          git push -f origin HEAD:refs/heads/manager
