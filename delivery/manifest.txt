@@ -1,0 +1,7 @@
+run_id:        40088222930
+kernel:        6.6.118-android15-8-gcfe96e1b603c6-ab10010135-4k
+ksu_version:   unknown
+image_size:    38738432
+boot_md5:      3787b9a8540e955b6e853a767ae61785
+boot_sha256:   c8fc8bef57b262426e0d0276f6457164f05ddc03e2919f6c88b60ca790529e70
+built_at:      2026-10-24T11:40:14Z
