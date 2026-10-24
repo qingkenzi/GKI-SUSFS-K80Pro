@@ -73,13 +73,14 @@ jobs:
           json.dump({"artifact": os.environ["NAME"]}, open("dl_meta.json", "w"))
           PY
 
-      - name: 用原厂 boot 模板重打包
+      - name: 用 4KB 模板重打包 boot.img
         run: |
           set -euo pipefail
-          xz -dc ci/boot_stock.img.xz > boot_stock.img
           IMG=$(find dl -name Image | head -1)
           [ -n "$IMG" ] || { echo "::error::未找到 Image"; exit 1; }
-          python3 ci/repack_boot_v4.py boot_stock.img "$IMG" boot.img --partition-size=100663296
+          # ci/boot_tpl.bin = 原厂 boot header(1584B) + AVB vbmeta blob(2368B) + AVB footer(64B)
+          # 该模板已在本机与「实机验证可开机」的镜像做过逐字节比对（md5 77a9eb2b…）
+          python3 ci/repack_boot_ci.py ci/boot_tpl.bin "$IMG" boot.img --partition-size=100663296
           python3 - <<'PY'
           import struct, sys, hashlib
           d = open("boot.img", "rb").read()
@@ -89,7 +90,9 @@ jobs:
           hv = struct.unpack_from("<I", d, 40)[0]
           assert rsz == 0, f"ramdisk_size 应为 0，实际 {rsz}"
           assert hv == 4, f"header_version 应为 4，实际 {hv}"
-          print(f"OK boot.img: kernel_size={ksz} ramdisk=0 header_v={hv}")
+          assert d.find(b"AVB0") > 0, "缺少 AVB vbmeta blob"
+          assert d[-64:-60] == b"AVBf", "缺少 AVB footer"
+          print(f"OK boot.img: kernel_size={ksz} ramdisk=0 header_v={hv} avb@{d.find(b'AVB0')}")
           PY
           xz -9e -T0 -c boot.img > boot.img.xz
           sha256sum boot.img | awk '{print $1}' > boot.sha256
