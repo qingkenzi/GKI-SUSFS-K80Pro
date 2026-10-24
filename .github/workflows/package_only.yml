@@ -58,7 +58,7 @@ jobs:
           sha256sum boot.img | awk '{print $1}' > boot.sha256
           md5sum boot.img | awk '{print $1}' > boot.md5
           KREL=$(strings -a "$IMG" | grep -m1 -o '6\.[0-9]*\.[0-9]*-android15-8[^ ]*' || echo unknown)
-          KV=$(strings -a "$IMG" | grep -m1 -o 'v[0-9.]*-[a-z0-9]*@builtin' || echo unknown)
+          KV=$(strings -a "$IMG" | grep -m1 -o 'v[0-9][^ ]*@builtin' || echo unknown)
           {
             echo "run_id:        ${{ inputs.run_id }}"
             echo "kernel:        $KREL"
