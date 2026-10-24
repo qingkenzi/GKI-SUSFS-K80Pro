@@ -1,56 +1,247 @@
 name: K80Pro 定版构建
 
-# 定版参数全部固化在本文件，派发时 body 只需 {"ref":"dev"}
-# 产出：最终可刷的 boot.img.xz（96MB 分区镜像），推到 delivery 分支 + 作为 artifact 上传
-# 手机端取用：bash ~/roo/tools/fetch_boot.sh <run_id|latest>
+permissions:
+  contents: write
+  actions: write
 
 on:
   workflow_dispatch:
     inputs:
-      flash_note:
-        description: "本次构建备注（写进 manifest，可留空）"
+      # ==================== 下拉选项 ====================
+      kernel_version:
+        description: "内核版本"
+        required: true
+        type: choice
+        options:
+          - "5.10"
+          - "5.15"
+          - "6.1"
+          - "6.6"
+          - "6.12"
+        default: "6.6"
+      kernelsu_variant:
+        description: "KernelSU 变体"
+        required: true
+        type: choice
+        options:
+          - Official
+          #- Next
+          - SukiSU
+          - SukiSU(40726)
+          - SukiSU(40548)
+          - BakaSU
+        default: SukiSU
+      ksu_mode:
+        description: "KernelSU / SUSFS 模式"
+        required: true
+        type: choice
+        options:
+          - 关闭
+          - 禁用SUSFS
+          - 禁用KSU
+        default: 关闭
+      use_kpm:
+        description: "KPM 功能（patched 尚不支持）"
+        required: true
+        type: choice
+        default: "disabled (关闭)"
+        options:
+          - "disabled (关闭)"
+          - "enabled (开启)"
+          - "patched (开启并修补，尚不支持)"
+      droidspaces:
+        description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁, 6.12: 开/关)"
+        required: false
+        type: choice
+        options:
+          - "off"
+          - "678"
+          - "123"
+          - "345"
+        default: "off"
+      artifact_upload_mode:
+        description: "构建产物上传模式"
+        required: true
+        type: choice
+        options:
+          - "仅上传 AnyKernel3.zip"
+          - "上传全部"
+        default: "上传全部"
+
+      # ==================== 文本输入 ====================
+      os_patch_level:
+        description: "安全补丁级别 (如 2022-01, lts)"
+        required: true
+        type: string
+        default: "2026-01"
+      version:
+        description: "自定义版本名 (可选)"
+        required: false
+        type: string
+      build_time:
+        description: "自定义构建时间 (可选，N或留空=当前UTC)"
         required: false
         type: string
         default: ""
 
-permissions:
-  contents: write
-  actions: read
+      # ==================== 开关（默认关闭） ====================
+      use_zram:
+        description: "启用 ZRAM 增强算法"
+        required: true
+        type: boolean
+        default: false
+      use_bbg:
+        description: "启用 BBG 防格机"
+        required: true
+        type: boolean
+        default: true
+      use_rekernel:
+        description: "启用 Re-Kernel 驱动"
+        required: false
+        type: boolean
+        default: false
+      use_nomount:
+        description: "启用 NoMount 挂载元模块"
+        required: false
+        type: boolean
+        default: false
+      use_networking:
+        description: "启用网络增强（BBRv3 / IPSet / Qdisc / CIFS）"
+        required: false
+        type: boolean
+        default: true
+      cve_2026_43499_patch:
+        description: "应用 CVE-2026-43499 rtmutex 修复链"
+        required: false
+        type: boolean
+        default: true
+      supp_op:
+        description: "启用一加 8E 支持"
+        required: false
+        type: boolean
+        default: false
+      droidspaces_ntsync:
+        description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  build:
-    name: 构建内核
+  resolve-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      android_version: ${{ steps.resolve.outputs.android_version }}
+      sub_level: ${{ steps.resolve.outputs.sub_level }}
+      kernel_full: ${{ steps.resolve.outputs.kernel_full }}
+    steps:
+      - name: 检出版本数据
+        uses: actions/checkout@v7
+
+      - name: 解析安全补丁级别
+        id: resolve
+        env:
+          KERNEL_VERSION: ${{ inputs.kernel_version }}
+          OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          kernel_version = os.environ["KERNEL_VERSION"]
+          os_patch_level = os.environ["OS_PATCH_LEVEL"].strip()
+          android_map = {
+              "5.10": "android12",
+              "5.15": "android13",
+              "6.1": "android14",
+              "6.6": "android15",
+              "6.12": "android16",
+          }
+          android_version = android_map.get(kernel_version)
+          if android_version is None:
+              print(f"::error::未适配的内核版本: {kernel_version}")
+              sys.exit(1)
+
+          data_path = Path("data") / android_version / f"{kernel_version}.json"
+
+          if not data_path.exists():
+              print(f"::error::未找到版本数据: {data_path}")
+              sys.exit(1)
+
+          with data_path.open("r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if os_patch_level == "lts":
+              kernel_full = data.get("lts")
+              if not kernel_full:
+                  print(f"::error::{android_version} / {kernel_version} 缺少 LTS 版本数据")
+                  sys.exit(1)
+              sub_level = "X"
+          else:
+              matched = next(
+                  (entry for entry in data.get("entries", []) if entry.get("date") == os_patch_level),
+                  None,
+              )
+              if matched is None:
+                  print(f"::error::未找到 {android_version} / {kernel_version} / {os_patch_level} 对应的版本数据")
+                  sys.exit(1)
+              kernel_full = matched.get("kernel", "")
+              prefix = f"{kernel_version}."
+              if not kernel_full.startswith(prefix):
+                  print(f"::error::版本数据异常: {kernel_full} 不属于 {kernel_version}")
+                  sys.exit(1)
+              sub_level = kernel_full.rsplit(".", 1)[-1]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"android_version={android_version}\n")
+              output.write(f"sub_level={sub_level}\n")
+              output.write(f"kernel_full={kernel_full}\n")
+
+          print(f"解析结果: {android_version} / {kernel_full}，子版本号: {sub_level}")
+          PY
+
+  build-custom-kernel:
+    name: "${{ needs.resolve-version.outputs.kernel_full }}-${{ needs.resolve-version.outputs.android_version }}-${{ inputs.os_patch_level }}"
+    needs: resolve-version
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
-      # ---- 内核基线（对应数据见 data/android15/6.6.json）----
-      android_version: android15
-      kernel_version: "6.6"
-      sub_level: "118"
-      os_patch_level: "2026-01"
+      android_version: ${{ needs.resolve-version.outputs.android_version }}
+      kernel_version: ${{ inputs.kernel_version }}
+      sub_level: ${{ needs.resolve-version.outputs.sub_level }}
+      os_patch_level: ${{ inputs.os_patch_level }}
       revision: "r1"
-      # ---- KSU / SUSFS ----
-      ksu_variant: SukiSU
-      ksu_mode: "关闭"            # 注意：本仓库语义为「KSU + SUSFS 都开启」
-      enable_susfs: true
-      version: ""                 # 留空 => 保留 -android15-8-g<hash>-<bid> 的 KMI 后缀
-      build_time: ""              # 留空 => 使用当前 UTC
-      # ---- 功能开关定版（依据 bench/RESULTS.md 实测）----
-      use_zram: false             # 弃用：收益微小 + 原版补丁会卡 Mi logo
-      use_bbg: true               # 保留：基带保护，LSM 正常
-      use_networking: true        # 保留：BBRv3 默认 + ipset/wireguard/cifs
-      cve_2026_43499_patch: true  # 保留：rtmutex 修复链
-      use_nomount: false          # 与 hybrid_mount 重叠
-      use_kpm: "disabled (关闭)"   # patched 模式尚不支持
-      use_rekernel: false         # 与现有隐藏方案重叠
-      supp_op: false              # 一加专用
-      droidspaces: "off"
-      droidspaces_ntsync: false
-      artifact_upload_mode: "上传全部"
+      ksu_variant: ${{ inputs.kernelsu_variant }}
+      version: ${{ inputs.version || '' }}
+      build_time: ${{ inputs.build_time || '' }}
+      use_zram: ${{ inputs.use_zram }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_kpm: ${{ inputs.use_kpm }}
+      use_rekernel: ${{ inputs.use_rekernel || false }}
+      use_nomount: ${{ inputs.use_nomount || false }}
+      use_networking: ${{ inputs.use_networking || false }}
+      cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
+      supp_op: ${{ inputs.supp_op || false }}
+      enable_susfs: ${{ inputs.ksu_mode != '禁用SUSFS' && inputs.ksu_mode != '禁用KSU' }}
+      ksu_mode: ${{ inputs.ksu_mode || '关闭' }}
+      droidspaces: ${{ inputs.droidspaces || 'off' }}
+      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
+  get-ksu-manager:
+    uses: ./.github/workflows/get-manager.yml
+    secrets: inherit
+    with:
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+
+  # ============================================================
+  # 打包：用 4KB 模板把 Image 打成最终可刷的 boot.img（96MB）
+  # 产出推到 delivery 分支 + 作为 artifact 上传；手机端用 tools/fetch_boot.sh 取
+  # ============================================================
   package:
     name: 打包 boot.img
-    needs: build
+    needs: build-custom-kernel
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -67,22 +258,18 @@ jobs:
             | python3 -c "import sys,json;print([a['name'] for a in json.load(sys.stdin)['artifacts'] if a['name'].startswith('SukiSU_kernel')][0])")
           echo "内核产物: $NAME"
           gh run download "${{ github.run_id }}" -R "$GITHUB_REPOSITORY" -D dl -n "$NAME"
-          find dl -name Image -o -name "*.img" | head -10
-          GH_TOKEN="$GH_TOKEN" NAME="$NAME" python3 - <<'PY'
-          import os, json
-          json.dump({"artifact": os.environ["NAME"]}, open("dl_meta.json", "w"))
-          PY
+          find dl -name Image | head -3
 
-      - name: 用 4KB 模板重打包 boot.img
+      - name: 用 4KB 模板打包 boot.img
         run: |
           set -euo pipefail
           IMG=$(find dl -name Image | head -1)
           [ -n "$IMG" ] || { echo "::error::未找到 Image"; exit 1; }
-          # ci/boot_tpl.bin = 原厂 boot header(1584B) + AVB vbmeta blob(2368B) + AVB footer(64B)
-          # 该模板已在本机与「实机验证可开机」的镜像做过逐字节比对（md5 77a9eb2b…）
+          # ci/boot_tpl.bin = 原厂 boot header(1584B) + AVB vbmeta(2368B) + footer(64B)
+          # 已在本机与「实机验证可开机」的镜像做过逐字节比对（md5 77a9eb2b…）
           python3 ci/repack_boot_ci.py ci/boot_tpl.bin "$IMG" boot.img --partition-size=100663296
           python3 - <<'PY'
-          import struct, sys, hashlib
+          import struct
           d = open("boot.img", "rb").read()
           assert len(d) == 100663296, f"大小异常 {len(d)}"
           assert d[:8] == b"ANDROID!", "magic 异常"
@@ -90,7 +277,7 @@ jobs:
           hv = struct.unpack_from("<I", d, 40)[0]
           assert rsz == 0, f"ramdisk_size 应为 0，实际 {rsz}"
           assert hv == 4, f"header_version 应为 4，实际 {hv}"
-          assert d.find(b"AVB0") > 0, "缺少 AVB vbmeta blob"
+          assert d.find(b"AVB0") > 0, "缺少 AVB vbmeta"
           assert d[-64:-60] == b"AVBf", "缺少 AVB footer"
           print(f"OK boot.img: kernel_size={ksz} ramdisk=0 header_v={hv} avb@{d.find(b'AVB0')}")
           PY
@@ -102,7 +289,6 @@ jobs:
           {
             echo "run_id:        ${{ github.run_id }}"
             echo "commit:        ${{ github.sha }}"
-            echo "note:          ${{ inputs.flash_note }}"
             echo "kernel:        $KREL"
             echo "ksu_version:   $KV"
             echo "image_size:    $(stat -c%s "$IMG")"
@@ -113,7 +299,7 @@ jobs:
           ls -l boot.img boot.img.xz
 
       - name: 上传最终 boot.img
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: k80pro-boot-${{ github.run_id }}
           path: |
