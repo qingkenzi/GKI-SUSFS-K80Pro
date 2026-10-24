@@ -1,0 +1,97 @@
+name: 仅打包 boot.img（测试/补救用）
+
+# 用指定构建 run 的产物，走与 k80pro.yml 相同的打包逻辑；不重新编译
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "源构建 run id（产物需已存在）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  package:
+    name: 打包 boot.img
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+
+      - name: 下载内核产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NAME=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.run_id }}/artifacts" \
+            | python3 -c "import sys,json;print([a['name'] for a in json.load(sys.stdin)['artifacts'] if a['name'].startswith('SukiSU_kernel')][0])")
+          echo "内核产物: $NAME"
+          gh run download "${{ inputs.run_id }}" -R "$GITHUB_REPOSITORY" -D dl -n "$NAME"
+          find dl -maxdepth 2 -type f | head -10
+
+      - name: 用 4KB 模板打包 boot.img
+        run: |
+          set -euo pipefail
+          AK=$(find dl -name "*AnyKernel3*.zip" | head -1)
+          [ -n "$AK" ] || { echo "::error::未找到 AnyKernel3.zip"; exit 1; }
+          unzip -o "$AK" -d ak >/dev/null
+          IMG=ak/Image
+          [ -f "$IMG" ] || { echo "::error::AnyKernel3 里没有 Image"; ls -l ak; exit 1; }
+          python3 ci/repack_boot_ci.py ci/boot_tpl.bin "$IMG" boot.img --partition-size=100663296
+          python3 - <<'PY'
+          import struct
+          d = open("boot.img", "rb").read()
+          assert len(d) == 100663296, f"大小异常 {len(d)}"
+          assert d[:8] == b"ANDROID!", "magic 异常"
+          ksz, rsz = struct.unpack_from("<II", d, 8)
+          hv = struct.unpack_from("<I", d, 40)[0]
+          assert rsz == 0 and hv == 4, f"布局异常 rsz={rsz} hv={hv}"
+          assert d.find(b"AVB0") > 0 and d[-64:-60] == b"AVBf", "AVB 缺失"
+          print(f"OK boot.img: kernel_size={ksz} avb@{d.find(b'AVB0')}")
+          PY
+          xz -9e -T0 -c boot.img > boot.img.xz
+          sha256sum boot.img | awk '{print $1}' > boot.sha256
+          md5sum boot.img | awk '{print $1}' > boot.md5
+          KREL=$(strings -a "$IMG" | grep -m1 -o '6\.[0-9]*\.[0-9]*-android15-8[^ ]*' || echo unknown)
+          KV=$(strings -a "$IMG" | grep -m1 -o 'v[0-9.]*-[a-z0-9]*@builtin' || echo unknown)
+          {
+            echo "run_id:        ${{ inputs.run_id }}"
+            echo "kernel:        $KREL"
+            echo "ksu_version:   $KV"
+            echo "image_size:    $(stat -c%s "$IMG")"
+            echo "boot_md5:      $(cat boot.md5)"
+            echo "boot_sha256:   $(cat boot.sha256)"
+            echo "built_at:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee manifest.txt
+
+      - name: 上传最终 boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: k80pro-boot-${{ inputs.run_id }}
+          path: |
+            boot.img.xz
+            boot.sha256
+            boot.md5
+            manifest.txt
+          retention-days: 90
+
+      - name: 推到 delivery 分支
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          cp boot.img.xz boot.sha256 boot.md5 manifest.txt "$RUNNER_TEMP/out/"
+          git config user.name "artifact-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git checkout --orphan delivery
+          git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p delivery
+          cp -a "$RUNNER_TEMP/out/." delivery/
+          git add -A delivery
+          git commit -m "boot.img from run ${{ inputs.run_id }}"
+          git push -f origin HEAD:refs/heads/delivery
