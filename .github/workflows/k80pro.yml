@@ -258,13 +258,16 @@ jobs:
             | python3 -c "import sys,json;print([a['name'] for a in json.load(sys.stdin)['artifacts'] if a['name'].startswith('SukiSU_kernel')][0])")
           echo "内核产物: $NAME"
           gh run download "${{ github.run_id }}" -R "$GITHUB_REPOSITORY" -D dl -n "$NAME"
-          find dl -name Image | head -3
+          find dl -maxdepth 2 -type f | head -10
 
       - name: 用 4KB 模板打包 boot.img
         run: |
           set -euo pipefail
-          IMG=$(find dl -name Image | head -1)
-          [ -n "$IMG" ] || { echo "::error::未找到 Image"; exit 1; }
+          AK=$(find dl -name "*AnyKernel3*.zip" | head -1)
+          [ -n "$AK" ] || { echo "::error::未找到 AnyKernel3.zip"; exit 1; }
+          unzip -o "$AK" -d ak >/dev/null
+          IMG=ak/Image
+          [ -f "$IMG" ] || { echo "::error::AnyKernel3 里没有 Image"; ls -l ak; exit 1; }
           # ci/boot_tpl.bin = 原厂 boot header(1584B) + AVB vbmeta(2368B) + footer(64B)
           # 已在本机与「实机验证可开机」的镜像做过逐字节比对（md5 77a9eb2b…）
           python3 ci/repack_boot_ci.py ci/boot_tpl.bin "$IMG" boot.img --partition-size=100663296
