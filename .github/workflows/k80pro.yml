@@ -86,7 +86,7 @@ on:
 
       # ==================== 开关（默认关闭） ====================
       use_zram:
-        description: "启用 ZRAM 增强算法"
+        description: "启用 ZRAM 增强算法（K80 Pro 上为 no-op：lz4 补丁栈会破坏 initramfs 解压，已跳过）"
         required: true
         type: boolean
         default: false
@@ -126,9 +126,15 @@ on:
         type: boolean
         default: false
 
+# SPEC-001 R1: 同版本/同补丁级别的构建互斥，避免两份并行跑并相互覆盖 delivery 分支
+concurrency:
+  group: k80pro-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}
+  cancel-in-progress: true
+
 jobs:
   resolve-version:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       android_version: ${{ steps.resolve.outputs.android_version }}
       sub_level: ${{ steps.resolve.outputs.sub_level }}
@@ -229,11 +235,14 @@ jobs:
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
+  # 可复用工作流任务不支持 timeout-minutes，超时限制由 get-manager.yml 内部 job 自己管控
   get-ksu-manager:
+    needs: [resolve-version, build-custom-kernel]
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      ksu_version: ${{ needs.build-custom-kernel.outputs.ksu_version }}
 
   # ============================================================
   # 打包：用 4KB 模板把 Image 打成最终可刷的 boot.img（96MB）
@@ -243,22 +252,20 @@ jobs:
     name: 打包 boot.img
     needs: build-custom-kernel
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
+      # SPEC-001 R3: 必须检出本次 dispatch 的 commit，不能用可变分支 dev
       - uses: actions/checkout@v7
         with:
-          ref: dev
+          ref: ${{ github.sha }}
 
+      # SPEC-001 R3: 只拉本 run 的产物（download-artifact 天然限定 run，不再手拼 API）
       - name: 下载内核产物
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          NAME=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/${{ github.run_id }}/artifacts" \
-            | python3 -c "import sys,json;print([a['name'] for a in json.load(sys.stdin)['artifacts'] if a['name'].startswith('SukiSU_kernel')][0])")
-          echo "内核产物: $NAME"
-          gh run download "${{ github.run_id }}" -R "$GITHUB_REPOSITORY" -D dl -n "$NAME"
-          find dl -maxdepth 2 -type f | head -10
+        uses: actions/download-artifact@v6
+        with:
+          pattern: '*_kernel-*'
+          path: dl
+          merge-multiple: false
 
       - name: 用 4KB 模板打包 boot.img
         run: |
@@ -287,13 +294,18 @@ jobs:
           xz -9e -T0 -c boot.img > boot.img.xz
           sha256sum boot.img | awk '{print $1}' > boot.sha256
           md5sum boot.img | awk '{print $1}' > boot.md5
-          KREL=$(strings -a "$IMG" | grep -m1 -o '6\.[0-9]*\.[0-9]*-android15-8[^ ]*' || echo unknown)
-          KV=$(strings -a "$IMG" | grep -m1 -o 'v[0-9][^ ]*@builtin' || echo unknown)
+          KREL=$(strings -a "$IMG" | grep -m1 -oE '[0-9]+\.[0-9]+\.[0-9]+-android[0-9]+[^ ]*' || echo unknown)
+          # SPEC-001 R7: 版本元数据以构建输出为准，不再从 Image 猜
+          KV="${{ needs.build-custom-kernel.outputs.ksu_version_full }}"
+          KVN="${{ needs.build-custom-kernel.outputs.ksu_version }}"
+          [ -n "$KV" ] || KV=$(strings -a "$IMG" | grep -m1 -oE 'v[0-9][^ ]*@[A-Za-z0-9_-]+' || echo unknown)
+          [ -n "$KVN" ] || KVN=unknown
           {
             echo "run_id:        ${{ github.run_id }}"
             echo "commit:        ${{ github.sha }}"
             echo "kernel:        $KREL"
             echo "ksu_version:   $KV"
+            echo "ksu_version_num: $KVN"
             echo "image_size:    $(stat -c%s "$IMG")"
             echo "boot_md5:      $(cat boot.md5)"
             echo "boot_sha256:   $(cat boot.sha256)"
@@ -302,7 +314,7 @@ jobs:
           ls -l boot.img boot.img.xz
 
       - name: 上传最终 boot.img
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: k80pro-boot-${{ github.run_id }}
           path: |
@@ -310,7 +322,8 @@ jobs:
             boot.sha256
             boot.md5
             manifest.txt
-          retention-days: 90
+          # SPEC-001: 产物只作 download/中转，80 天→30 天已足够，减少配额占用
+          retention-days: 30
 
       - name: 推到 delivery 分支
         run: |

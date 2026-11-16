@@ -86,7 +86,7 @@ on:
 
       # ==================== 开关（默认关闭） ====================
       use_zram:
-        description: "启用 ZRAM 增强算法"
+        description: "启用 ZRAM 增强算法（K80 Pro 上为 no-op：lz4 补丁栈会破坏 initramfs 解压，已跳过）"
         required: true
         type: boolean
         default: false

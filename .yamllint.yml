@@ -1,0 +1,23 @@
+# yamllint 配置
+#
+# 这些规则并非"放过真问题"，而是对本仓库的既有风格做适配：
+# - line-length: 上游 workflow（zzh20188/GKI_KernelSU_SUSFS）通篇长行（echo/sed 一行式命令），
+#   按 80 列会产出上百条与正确性无关的噪声；本仓库只保证语法与语义正确。
+# - truthy: GitHub Actions 必须用 `on:` 键，且输入里存在 "true"/"false" 字符串，
+#   默认规则会误报。
+# - document-start: workflow 文件不使用 `---` 起始，GitHub 侧同样接受。
+extends: default
+
+rules:
+  line-length: disable
+  document-start: disable
+  truthy:
+    allowed-values: ["true", "false", "on", "off", "yes", "no"]
+    check-keys: false
+  comments-indentation: disable
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1

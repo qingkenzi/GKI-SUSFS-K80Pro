@@ -97,11 +97,23 @@ on:
         type: boolean
         default: false
 
+    # SPEC-001 R4: 内核侧 KSU 版本以编译产物为准，供 get-manager 选择匹配的管理器 APK
+    outputs:
+      ksu_version:
+        description: "内核编译产物的 KSU 数字版本号（来自编译日志，缺失时为空）"
+        value: ${{ jobs.build-kernel.outputs.ksu_version }}
+      ksu_version_full:
+        description: "内核编译产物的 KSU 完整版本串（如 v3.0.0-4bec532d@builtin）"
+        value: ${{ jobs.build-kernel.outputs.ksu_version_full }}
+
 jobs:
   build-kernel:
     name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      ksu_version: ${{ steps.ksu_version.outputs.num }}
+      ksu_version_full: ${{ steps.ksu_version.outputs.full }}
 
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -248,21 +260,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
+      # SPEC-001 R6: Kleaf 不经过 ccache，只有 5.10/5.15 的 make 路径会用到它
       - name: 配置 ccache
+        if: inputs.kernel_version == '5.10' || inputs.kernel_version == '5.15'
         run: |
-          mkdir -p ~/.cache/bazel
           ccache --version
           ccache --max-size=2G
           ccache --set-config=compression=true
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
+      - name: 准备 bazel 磁盘缓存目录
+        run: mkdir -p ~/.cache/bazel
+
       - name: 恢复 ccache 缓存
+        if: inputs.kernel_version == '5.10' || inputs.kernel_version == '5.15'
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-${{ github.sha }}
+          key: ccache-${{ inputs.kernel_version }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
+            ccache-${{ inputs.kernel_version }}-
 
       # 仅 6.1+ 走 bazel 构建，持久化 --disk_cache 目录以加速后续构建
       - name: 恢复 bazel 磁盘缓存
@@ -270,10 +287,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-bazel-${{ github.sha }}
+          # SPEC-001 R6: 稳定 key（配置维度 + build.yml 哈希）。Kleaf 的 --disk_cache 是内容寻址的，
+          # 跨 commit 复用安全；用 github.sha 只会每次新存一份并挤爆 10 GB 缓存配额。
+          key: bazel-${{ inputs.kernel_version }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-bazel-
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-bazel-
+            bazel-${{ inputs.kernel_version }}-
 
       - name: 缓存工具链
         id: cache-toolchain
@@ -400,9 +418,9 @@ jobs:
             rc=0
             if init_repo; then
               # 不加 --fail-fast：单个 project 出错时让其余 project 继续拉完，
-              # 重试只需要补齐缺失部分。-j4 与 --no-clone-bundle 是为了避免
-              # 高并发触发限流、以及跳过经常超时的 clone.bundle。
-              SYNC_FLAGS="-c -j4 --jobs-checkout=4 --no-tags --no-clone-bundle --retry-fetches=3"
+              # 重试只需要补齐缺失部分。这一步是网络瓶颈而非 CPU，故用 -j8（SPEC-001 R9）；
+              # --no-clone-bundle 跳过经常超时的 clone.bundle。
+              SYNC_FLAGS="-c -j8 --jobs-checkout=8 --no-tags --no-clone-bundle --retry-fetches=3"
               # 第二次在原地续传（repo sync 可断点续传），第三次才整目录重来
               [ "$attempt" -gt 1 ] && SYNC_FLAGS="$SYNC_FLAGS --force-sync"
               timeout -k 60 "$SYNC_TIMEOUT" $REPO sync $SYNC_FLAGS || rc=$?
@@ -1636,6 +1654,33 @@ jobs:
               echo "退出码: $BUILD_STATUS"
             } >> "$LOG_FILE"
             exit "$BUILD_STATUS"
+
+      # SPEC-001 R4: 从编译日志（含 `-- <NAME> version: <N> [<full>]`）提取真实版本号
+      - name: 解析内核侧 KSU 版本
+        id: ksu_version
+        if: ${{ steps.compile_kernel.outcome == 'success' }}
+        run: |
+          LOG=$(ls -t "$GITHUB_WORKSPACE"/build-logs/compile-attempt-*.log 2>/dev/null | head -1 || true)
+          NUM=""
+          FULL=""
+          if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+            NUM=$(grep -oE -- '-- .*version: [0-9]+' "$LOG" | tail -1 | grep -oE '[0-9]+$' || true)
+            FULL=$(grep -oE -- '\[v[0-9][^]]*@[^]]*\]' "$LOG" | tail -1 | tr -d '[]' || true)
+          fi
+          if [ -z "$FULL" ]; then
+            IMG="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"
+            if [ ! -f "$IMG" ]; then
+              IMG=$(find "$KERNEL_ROOT" -maxdepth 5 -name Image -type f 2>/dev/null | head -1 || true)
+            fi
+            if [ -n "$IMG" ] && [ -f "$IMG" ]; then
+              FULL=$(strings -a "$IMG" | grep -m1 -oE 'v[0-9][^ ]*@[A-Za-z0-9_-]+' || true)
+            fi
+          fi
+          echo "内核侧 KSU 版本: ${NUM:-未知} (${FULL:-未知})"
+          {
+            echo "num=$NUM"
+            echo "full=$FULL"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 整理编译失败日志
         if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
