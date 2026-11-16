@@ -47,8 +47,10 @@
 ### R5 管理器获取顺序
 获取管理器 APK 必须**先查 GitHub Release 资产**（文件名形如 `*_v<semver>_<versionCode>-release.apk`，取 `versionCode ≤ 内核版本` 的最大值），失败才回退到「扫描 Actions 产物」的旧路径；两条路径都不改变 `manager` 分支语义。
 
+**R5.1（run 43890824595 发现的规格漏洞）**：`/repos/{owner}/{repo}/releases` 列表接口可能返回空数组（`SukiSU-Nova/SukiSU-Nova` 现状：列表为 `[]`，但 `/releases/tags/v3.0.0` 有 25 个资产）。因此枚举 Release 必须**双路**：列表为空或无匹配时，按 `/repos/{owner}/{repo}/tags` 逐个查 `/releases/tags/<tag>`。
+
 ### R6 缓存有效
-bazel 磁盘缓存与 ccache 的 key 不得包含 `github.sha`；bazel key 必须含配置维度与 `hashFiles('.github/workflows/build.yml')`，并保留前缀 `restore-keys`。ccache 的配置/恢复步骤只在 `5.10`/`5.15` 生效，而 `~/.cache/bazel` 目录准备对全部版本保留。
+bazel 磁盘缓存与 ccache 的 key 不得包含 `github.sha`；bazel key 必须是**仅含版本维度的稳定 key**（形如 `bazel-<kernel_version>-v<N>`），**不得含 `hashFiles(build.yml)`** —— 否则每次编辑 CI 都会换 key 而永久冷启动；同时必须保留前缀 `restore-keys`。ccache 的配置/恢复步骤只在 `5.10`/`5.15` 生效，而 `~/.cache/bazel` 目录准备对全部版本保留。
 
 ### R7 manifest 元数据
 打包 manifest 必须包含 `ksu_version`（来自 R4 的 output）；内核版本串正则不得硬编码 `androidNN-N`。
@@ -66,8 +68,8 @@ bazel 磁盘缓存与 ccache 的 key 不得包含 `github.sha`；bazel key 必�
 - AC2 满足 R2：`k80pro.yml` 的 4 个 job 均有 `timeout-minutes`
 - AC3 满足 R3：package 的 `ref` 为 `${{ github.sha }}`，且使用 `actions/download-artifact@`
 - AC4 满足 R4：`build.yml` 声明 `outputs.ksu_version`，且存在解析 `version: <N>` 的步骤
-- AC5 满足 R5：`get-manager.yml` 含 release 资产解析与 `ksu_version` 输入；`k80pro.yml` 传入 `needs.*.outputs.ksu_version`
-- AC6 满足 R6：缓存 key 不含 `github.sha`；bazel key 含 `hashFiles`；ccache 步骤带 5.10/5.15 条件
+- AC5 满足 R5/R5.1：`get-manager.yml` 含 release 资产解析、`releases/tags/` 回退与 `ksu_version` 输入；`k80pro.yml` 传入 `needs.*.outputs.ksu_version`
+- AC6 满足 R6：缓存 key 不含 `github.sha`；bazel key 形如 `bazel-${{ inputs.kernel_version }}-v<N>` 且不含 `hashFiles`；有前缀 `restore-keys`；ccache 步骤带 5.10/5.15 条件
 - AC7 满足 R7：manifest 段含 `ksu_version:`，KREL 正则不含 `android15-8`
 - AC8 满足 R8：死文件不存在；两份入口的 `use_zram` 描述一致且标注 no-op
 - AC9 满足 R9：`repo sync` 并行度 ≥ 8
@@ -92,4 +94,5 @@ bazel 磁盘缓存与 ccache 的 key 不得包含 `github.sha`；bazel key 必�
 
 - **D1 不做上游同步**：逐条核验后确认对 6.6/Android15 定版零收益（详见上文 N1）。
 - **D2 版本以产物为准**：公式法在不同分支（main vs builtin）会得到不同数量级的结果，是 P1/P2 的根因。
-- **D3 缓存 key 用 `hashFiles(build.yml)` 而非 sha**：Kleaf `--disk_cache` 是内容寻址的，跨 commit 复用安全；用 sha 只会制造垃圾缓存并挤爆 10 GB 配额。
+- **D3 缓存 key 用稳定配置维度（而非 sha，也不含 build.yml 哈希）**：Kleaf `--disk_cache` 是内容寻址的，跨 commit 复用安全；用 sha 只会制造垃圾缓存并挤爆 10 GB 配额，而用 `hashFiles(build.yml)` 会在每次 CI 编辑后冷启动（run 43890824595 已因此重新冷启动一次）。需要强制失效时手动 bump `-v<N>`。
+- **D4 Release 枚举双路**：GitHub 的 `/releases` 列表对部分仓库（`SukiSU-Nova/SukiSU-Nova`）返回空数组，而 tag 端点正常；只依赖列表会在真实仓库上静默失效（run 43890824595 的 R5 首次实现即在此失败）。验收必须覆盖真实仓库形态，而不是只靠本地 fixture。

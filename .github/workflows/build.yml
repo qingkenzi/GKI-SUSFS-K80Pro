@@ -277,7 +277,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-${{ inputs.kernel_version }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: ccache-${{ inputs.kernel_version }}-v1
           restore-keys: |
             ccache-${{ inputs.kernel_version }}-
 
@@ -287,9 +287,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
-          # SPEC-001 R6: 稳定 key（配置维度 + build.yml 哈希）。Kleaf 的 --disk_cache 是内容寻址的，
-          # 跨 commit 复用安全；用 github.sha 只会每次新存一份并挤爆 10 GB 缓存配额。
-          key: bazel-${{ inputs.kernel_version }}-${{ hashFiles('.github/workflows/build.yml') }}
+          # SPEC-001 R6/D3: 仅按版本维度的稳定 key（需强制失效时手动 bump -vN）。
+          # Kleaf 的 --disk_cache 是内容寻址的，跨 commit 复用安全；带 sha 或 hashFiles 会让
+          # 每次提交/每次编辑 CI 都换 key，永远冷启动并刷爆 10 GB 缓存配额。
+          key: bazel-${{ inputs.kernel_version }}-v1
           restore-keys: |
             bazel-${{ inputs.kernel_version }}-
 

@@ -97,29 +97,31 @@ def ac4(k80: str, build: str, mgr: str, custom: str) -> tuple[bool, str]:
 
 
 def ac5(k80: str, build: str, mgr: str, custom: str) -> tuple[bool, str]:
-    """R5: 管理器 Release 资产优先 + 调用侧传参。"""
+    """R5/R5.1: 管理器 Release 资产优先（/releases 列表 + /releases/tags 双路）。"""
     ok = (
         re.search(r"ksu_version:\s*\n\s+required:\s*false", mgr) is not None
         and re.search(r"releases\?per_page=", mgr) is not None
+        and re.search(r"releases/tags/", mgr) is not None
         and re.search(r"-release\\\\?\.apk", mgr) is not None
         and re.search(r"ksu_version:\s*\$\{\{\s*needs\.[a-z-]+\.outputs\.ksu_version", k80) is not None
         and re.search(r"get-ksu-manager:\s*\n\s+needs:", k80) is not None
     )
-    return ok, "get-manager 有 ksu_version 输入 + Release 资产优先；k80pro 传入 needs 输出"
+    return ok, "get-manager 有 ksu_version 输入 + Release(列表/tag 双路)；k80pro 传入 needs 输出"
 
 
 def ac6(k80: str, build: str, mgr: str, custom: str) -> tuple[bool, str]:
-    """R6: 缓存 key 稳定且按版本区分。"""
-    bad_key = re.search(r"^\s+key:.*(bazel|ccache).*github\.sha", build, re.M)
+    """R6: 缓存 key 稳定（仅版本维度 + 手动 vN），不含 sha / hashFiles。"""
+    bad_key = re.search(r"^\s+key:.*(bazel|ccache).*(github\.sha|hashFiles)", build, re.M)
     ok = (
         bad_key is None
-        and re.search(r"key: bazel-\$\{\{ inputs\.kernel_version \}\}-\$\{\{ hashFiles\(", build) is not None
+        and re.search(r"key: bazel-\$\{\{ inputs\.kernel_version \}\}-v\d+", build) is not None
+        and re.search(r"key: ccache-\$\{\{ inputs\.kernel_version \}\}-v\d+", build) is not None
         and re.search(
             r"restore-keys:\s*\|?\s*\n\s+bazel-\$\{\{ inputs\.kernel_version \}\}-", build
         ) is not None
         and len(re.findall(r"kernel_version == '5\.10' \|\| inputs\.kernel_version == '5\.15'", build)) >= 2
     )
-    return ok, "缓存 key 不含 github.sha；bazel key 含 hashFiles + 前缀 restore；ccache 限 5.10/5.15"
+    return ok, "缓存 key 不含 sha/hashFiles；bazel/ccache key = <类型>-<kver>-vN + 前缀 restore；ccache 限 5.10/5.15"
 
 
 def ac7(k80: str, build: str, mgr: str, custom: str) -> tuple[bool, str]:

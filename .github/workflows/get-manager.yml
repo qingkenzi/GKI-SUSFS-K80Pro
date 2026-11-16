@@ -158,25 +158,50 @@ jobs:
           esac
 
           mkdir -p manager-artifacts/release
-          for repo in $REPOS; do
-            JSON=$(mktemp)
-            if ! curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$JSON" \
-                "https://api.github.com/repos/$repo/releases?per_page=30"; then
-              echo "拉取 $repo 的 Release 列表失败"
-              continue
-            fi
-            BEST=$(jq -r --arg target "$TARGET" '
-              [ .[] | .assets[]?
-                | select(.name | test("_v[0-9]+(\\.[0-9]+)*_[0-9]+-release\\.apk$"))
-                | {name: .name,
-                   url: .browser_download_url,
-                   code: (.name | capture("_(?<c>[0-9]+)-release\\.apk$").c | tonumber)}
+
+          # SPEC-001 R5.1: 把“releases 数组”或“单个 release 对象”统一归一后选出匹配项
+          pick_manager() {
+            jq -r --arg target "$TARGET" '
+              ([.] | if (.[0] | type) == "array" then .[0] else . end)
+              | [ .[]? | .assets[]?
+                  | select(.name | test("_v[0-9]+(\\.[0-9]+)*_[0-9]+-release\\.apk$"))
+                  | {name: .name,
+                     url: .browser_download_url,
+                     code: (.name | capture("_(?<c>[0-9]+)-release\\.apk$").c | tonumber)}
               ]
               | sort_by(.code)
               | map(select(.code <= ($target | tonumber)))
               | last // empty
               | "\(.code)\t\(.name)\t\(.url)"
-            ' "$JSON")
+            '
+          }
+
+          for repo in $REPOS; do
+            BEST=""
+            JSON=$(mktemp)
+            # 1) 官方 /releases 列表（多数仓库可用）
+            if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$JSON" \
+                "https://api.github.com/repos/$repo/releases?per_page=30"; then
+              BEST=$(pick_manager < "$JSON")
+            else
+              echo "拉取 $repo 的 Release 列表失败"
+            fi
+
+            # 2) SPEC-001 R5.1: 列表为空/无匹配时按 tag 逐个查（SukiSU-Nova 的 /releases 返回 []）
+            if [ -z "$BEST" ]; then
+              TAGS=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                       "https://api.github.com/repos/$repo/tags?per_page=30" \
+                     | jq -r '.[]?.name | select(test("^v[0-9]+\\.[0-9]+"))' 2>/dev/null || true)
+              for tag in $TAGS; do
+                RJSON=$(mktemp)
+                if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$RJSON" \
+                    "https://api.github.com/repos/$repo/releases/tags/$tag"; then
+                  BEST=$(pick_manager < "$RJSON")
+                  [ -n "$BEST" ] && break
+                fi
+              done
+            fi
+
             if [ -z "$BEST" ]; then
               echo "$repo 的 Release 资产中没有 versionCode ≤ $TARGET 的管理器"
               continue
