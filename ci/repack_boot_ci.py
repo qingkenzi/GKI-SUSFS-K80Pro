@@ -11,6 +11,8 @@
 
 用法: repack_boot_ci.py <boot_tpl.bin> <Image> <out.img> [--partition-size=100663296]
 """
+import hashlib
+import os
 import struct
 import sys
 
@@ -33,6 +35,19 @@ def main():
 
     tpl = open(tpl_path, "rb").read()
     kernel = open(img_path, "rb").read()
+
+    # 模板完整性：模板被改坏 = 打出来的 boot.img 不可启动，宁可直接报错
+    tpl_sha = hashlib.sha256(tpl).hexdigest()
+    sha_path = tpl_path + ".sha256"
+    if os.path.exists(sha_path):
+        with open(sha_path, "r", encoding="utf-8") as f:
+            expect = (f.read().split() or [""])[0]
+        if expect != tpl_sha:
+            raise SystemExit(f"模板校验失败: 实际 {tpl_sha} != 期望 {expect}"
+                             "（boot_tpl.bin 被改动过？确认后用 make_template.py 重新生成）")
+        print(f"template sha256 = {tpl_sha[:16]}… (校验通过)")
+    else:
+        print(f"template sha256 = {tpl_sha[:16]}… (无 {os.path.basename(sha_path)}，跳过校验)")
 
     header = bytearray(tpl[:1584])
     if header[:8] != b"ANDROID!":
