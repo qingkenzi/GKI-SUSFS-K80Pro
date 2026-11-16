@@ -126,7 +126,7 @@ on:
         type: boolean
         default: false
 
-# SPEC-001 R1: 同版本/同补丁级别的构建互斥，避免两份并行跑并相互覆盖 delivery 分支
+# 同版本/同补丁级别的构建互斥，避免两份并行跑并相互覆盖 delivery 分支
 concurrency:
   group: k80pro-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}
   cancel-in-progress: true
@@ -254,12 +254,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      # SPEC-001 R3: 必须检出本次 dispatch 的 commit，不能用可变分支 dev
+      # 必须检出本次 dispatch 的 commit，不能用可变分支 dev
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
-      # SPEC-001 R3: 只拉本 run 的产物（download-artifact 天然限定 run，不再手拼 API）
+      # 只拉本 run 的产物（download-artifact 天然限定 run，不再手拼 API）
       - name: 下载内核产物
         uses: actions/download-artifact@v6
         with:
@@ -295,7 +295,7 @@ jobs:
           sha256sum boot.img | awk '{print $1}' > boot.sha256
           md5sum boot.img | awk '{print $1}' > boot.md5
           KREL=$(strings -a "$IMG" | grep -m1 -oE '[0-9]+\.[0-9]+\.[0-9]+-android[0-9]+[^ ]*' || echo unknown)
-          # SPEC-001 R7: 版本元数据以构建输出为准，不再从 Image 猜
+          # 版本元数据以构建输出为准，不再从 Image 猜
           KV="${{ needs.build-custom-kernel.outputs.ksu_version_full }}"
           KVN="${{ needs.build-custom-kernel.outputs.ksu_version }}"
           [ -n "$KV" ] || KV=$(strings -a "$IMG" | grep -m1 -oE 'v[0-9][^ ]*@[A-Za-z0-9_-]+' || echo unknown)
@@ -322,7 +322,7 @@ jobs:
             boot.sha256
             boot.md5
             manifest.txt
-          # SPEC-001: 产物只作 download/中转，80 天→30 天已足够，减少配额占用
+          # : 产物只作 download/中转，80 天→30 天已足够，减少配额占用
           retention-days: 30
 
       - name: 推到 delivery 分支

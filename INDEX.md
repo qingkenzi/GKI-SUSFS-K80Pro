@@ -23,7 +23,6 @@ GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两
 |---|---|
 | `.github/workflows/k80pro.yml` | ★ **现行入口**。`resolve-version` → 调 `build.yml` 编译 → 自己用模板打包 `boot.img` → 校验 → 按 `artifact_upload_mode` 上传或推 `delivery` 分支 |
 | `.github/workflows/package_only.yml` | 只打包不重编：输入旧 `run_id`，走和 `k80pro.yml` 完全相同的打包逻辑（约 2 分钟）|
-| `specs/ci-hardening/` | **SPEC-001 规格驱动产物**：`spec.md`（需求 R1–R9 / 验收 AC1–AC9）、`plan.md`、`tasks.md`、`verify.py`（`python3 specs/ci-hardening/verify.py` 即静态验收）|
 | `.yamllint.yml` | 仓库级 yamllint 配置（放开 80 列行长与 `on:` truthy，避免上游长行风格产生噪声）|
 | `ci/boot_tpl.bin` | **4 KB 打包模板** = 原厂 1584 B header + AVB vbmeta 2368 B + AVB footer 64 B |
 | `ci/boot_tpl.bin.sha256` | 模板哈希（裸哈希，一行）。`cb2da129…32ce5b` |
@@ -31,7 +30,7 @@ GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两
 | `ci/make_template.py` | 从**整分区 dump** 重新切出 4 KB 模板，并回写 `.sha256` |
 | `ci/repack_boot_v4.py` | 备用打包器（**丢 AVB footer**，本机兜底用，CI 不用）|
 
-旧的 `deliver.yml` / `deliver_manager.yml` 与空壳 `susfs-probe.yml`、死代码 `zram/` 已由 **SPEC-001 T14** 删除。
+旧的 `deliver.yml` / `deliver_manager.yml`、空壳 `susfs-probe.yml` 与死代码 `zram/` 已经删除。
 第 10 处改动不是新文件，是 `build.yml` 里的一处补丁，见下节。
 
 ## 二、唯一被改过的上游文件：`build.yml`
@@ -39,11 +38,10 @@ GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两
 | | sha256 前 8 | `[K80Pro-fix]` |
 |---|---|---|
 | 上游原版（= `~/roo/build/build_repo_current.yml`） | `4d774ae5` | 0 处 |
-| 本仓 `dev`（SPEC-001 之前） | `3511e447` | 1 处 |
-| **本仓 `dev` 现行（含 SPEC-001）** | `2035c4b3` | 1 处 |
+| 本仓 `dev` 现行 | `2035c4b3` | 1 处 |
 | 未采用的实验稿（= `~/roo/build/build_prepared_unused.yml`） | `e1ecc566` | 3 处（本仓只要了第 1 处）|
 
-SPEC-001 之后 `build.yml` 与上游的差异 = 那 1 处 `[K80Pro-fix]` + 4 处本仓定制
+`build.yml` 与上游的差异 = 那 1 处 `[K80Pro-fix]` + 本仓定制
 （`ksu_version` outputs、bazel/ccache 缓存 key、ccache 仅 5.10/5.15、`repo sync -j8`）。
 
 那 1 处改动：**`use_zram` 分支里跳过 "ZZH lz4 补丁栈"**（不替换 `lib/lz4/*`、不打 ARMv8 NEON 加速）。
@@ -65,7 +63,7 @@ SPEC-001 之后 `build.yml` 与上游的差异 = 那 1 处 `[K80Pro-fix]` + 4 �
 | `scripts/` | 5 | 29 KB | `gki_fetch.py` / `fetch_all.py` 拉 AOSP GKI 源码与预编译产物；`susfs_fixes/apply.sh` 打 SUSFS 修复；`update_data.py` / `update_lts.py` 更新 `data/` |
 | `security_patch/` | 10 | 34 KB | CVE-2026-43499：`apply_cve_2026_43499.sh` 总入口 + 4 个 rtmutex 版本补丁 + guards patch + `scoped_guard_*`；`build.yml` 在 `cve_2026_43499_patch=true` 时调用 |
 | `web/` | 36 | 0.26 MB | GitHub Pages 静态站（`index.html` / `guide.html` + `js/` + `scss/` + webpack）；`update-pages.yml` 部署 |
-| `zram/` | ~~10~~ | ~~0.27 MB~~ | **已删除（SPEC-001 T14）**：死代码，`build.yml` 的 K80Pro-fix 早已跳过拷贝 |
+| `zram/` | ~~10~~ | ~~0.27 MB~~ | **已删除**：死代码，`build.yml` 的 K80Pro-fix 早已跳过拷贝 |
 | `assets/` | 8 | 15.56 MB | 上游 README 的图片和 **2 个演示 mp4**（4.8 + 10.4 MB）；仓库体积大头 |
 | 根文件 | 7 | 0.03 MB | `README.md`（上游中文自述）/ `README-EN.md` / `LICENSE`（GPL-2.0）/ `CODE_OF_CONDUCT.md` / `.gitattributes` / `.gitignore` / `hmbird_patch.c` |
 
@@ -108,8 +106,7 @@ K80Pro 走 `k80pro.yml` / `kernel-custom.yml` → `build.yml` + `get-manager.yml
 
 1. **改 `build.yml` 前对齐哈希**：现行 `2035c4b3`，上游原版 `4d774ae5`。搜 `[K80Pro-fix]` 就能看到内核相关的唯一定制点。
 2. **`k80pro.yml` 与 `kernel-custom.yml` 的输入完全一样**：改默认值要两份一起改，否则两个入口行为不一致。
-3. **流程类改动先看 `specs/ci-hardening/spec.md`**：该目录是本仓的规范驱动（SDD）产物，改完跑 `python3 specs/ci-hardening/verify.py`。
-4. **`assets/`、`web/`、`config/stock_*.config`、`docs/`、`scripts/` 全是上游的**：动它们会和上游同步冲突，能不改就不改。
+3. **`assets/`、`web/`、`config/stock_*.config`、`docs/`、`scripts/` 全是上游的**：动它们会和上游同步冲突，能不改就不改。
 6. **`delivery` / `manager` 分支别手改**：force push，改了下次构建就没。
 7. **打包模板别手改**：`ci/boot_tpl.bin` 被改动 → `repack_boot_ci.py` 直接报错退出（模板坏 = 镜像不可启动）。要重做就用 `ci/make_template.py`。
 

@@ -9,7 +9,7 @@ on:
       kernelsu_variant:
         required: true
         type: string
-      # SPEC-001 R4/R5: 内核编译产物里的真实 KSU 版本号（由 build.yml 的 outputs 提供）
+      # 内核编译产物里的真实 KSU 版本号（由 build.yml 的 outputs 提供）
       ksu_version:
         required: false
         type: string
@@ -26,7 +26,7 @@ on:
 jobs:
   get_ksu_manager:
     runs-on: ubuntu-24.04
-    # SPEC-001 R2: 可复用工作流任务无法在调用侧限制超时，改在内部 job 限制
+    # 可复用工作流任务无法在调用侧限制超时，改在内部 job 限制
     timeout-minutes: 20
     outputs:
       ksuVer: ${{ steps.get_version.outputs.kversion }}
@@ -69,7 +69,7 @@ jobs:
       - name: 获取 KSU & SUSFS 版本
         id: get_version
         run: |
-          # SPEC-001 R5: SUSFS 模块版本与 KSU 版本解耦，先算（不依赖 clone）
+          # SUSFS 模块版本与 KSU 版本解耦，先算（不依赖 clone）
           if [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40726)" ]; then
             SUS_VERSION="v2.1.0"
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40548)" ]; then
@@ -79,7 +79,7 @@ jobs:
             SUS_VERSION=$(curl -s $INFO | awk -F '=' '$1 == "version" { print $2 }')
           fi
 
-          # SPEC-001 R4: 优先使用内核编译产物的版本号；不再按分支 commit 数猜
+          # 优先使用内核编译产物的版本号；不再按分支 commit 数猜
           PROVIDED="${{ inputs.ksu_version }}"
           if [[ "$PROVIDED" =~ ^[0-9]+$ ]]; then
             KSU_VERSION="$PROVIDED"
@@ -138,7 +138,7 @@ jobs:
           echo "kversion=$KSU_VERSION" >> "$GITHUB_OUTPUT"
           echo "sversion=$SUS_VERSION" >> "$GITHUB_OUTPUT"
 
-      # SPEC-001 R5: 先查官方 Release 资产（比扫 Actions 产物稳定，且与内核版本号对齐）
+      # 先查官方 Release 资产（比扫 Actions 产物稳定，且与内核版本号对齐）
       - name: 优先使用官方 Release 的管理器 APK
         id: release_manager
         continue-on-error: true
@@ -159,7 +159,7 @@ jobs:
 
           mkdir -p manager-artifacts/release
 
-          # SPEC-001 R5.1: 把“releases 数组”或“单个 release 对象”统一归一后选出匹配项
+          # 把“releases 数组”或“单个 release 对象”统一归一后选出匹配项
           pick_manager() {
             jq -r --arg target "$TARGET" '
               ([.] | if (.[0] | type) == "array" then .[0] else . end)
@@ -187,7 +187,7 @@ jobs:
               echo "拉取 $repo 的 Release 列表失败"
             fi
 
-            # 2) SPEC-001 R5.1: 列表为空/无匹配时按 tag 逐个查（SukiSU-Nova 的 /releases 返回 []）
+            # 2) 列表为空/无匹配时按 tag 逐个查（SukiSU-Nova 的 /releases 返回 []）
             if [ -z "$BEST" ]; then
               TAGS=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
                        "https://api.github.com/repos/$repo/tags?per_page=30" \

@@ -97,7 +97,7 @@ on:
         type: boolean
         default: false
 
-    # SPEC-001 R4: 内核侧 KSU 版本以编译产物为准，供 get-manager 选择匹配的管理器 APK
+    # 内核侧 KSU 版本以编译产物为准，供 get-manager 选择匹配的管理器 APK
     outputs:
       ksu_version:
         description: "内核编译产物的 KSU 数字版本号（来自编译日志，缺失时为空）"
@@ -260,7 +260,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
-      # SPEC-001 R6: Kleaf 不经过 ccache，只有 5.10/5.15 的 make 路径会用到它
+      # Kleaf 不经过 ccache，只有 5.10/5.15 的 make 路径会用到它
       - name: 配置 ccache
         if: inputs.kernel_version == '5.10' || inputs.kernel_version == '5.15'
         run: |
@@ -287,7 +287,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
-          # SPEC-001 R6/D3: 仅按版本维度的稳定 key（需强制失效时手动 bump -vN）。
+          # 仅按版本维度的稳定 key（需强制失效时手动 bump -vN）。
           # Kleaf 的 --disk_cache 是内容寻址的，跨 commit 复用安全；带 sha 或 hashFiles 会让
           # 每次提交/每次编辑 CI 都换 key，永远冷启动并刷爆 10 GB 缓存配额。
           key: bazel-${{ inputs.kernel_version }}-v1
@@ -419,7 +419,7 @@ jobs:
             rc=0
             if init_repo; then
               # 不加 --fail-fast：单个 project 出错时让其余 project 继续拉完，
-              # 重试只需要补齐缺失部分。这一步是网络瓶颈而非 CPU，故用 -j8（SPEC-001 R9）；
+              # 重试只需要补齐缺失部分。这一步是网络瓶颈而非 CPU，故用 -j8（）；
               # --no-clone-bundle 跳过经常超时的 clone.bundle。
               SYNC_FLAGS="-c -j8 --jobs-checkout=8 --no-tags --no-clone-bundle --retry-fetches=3"
               # 第二次在原地续传（repo sync 可断点续传），第三次才整目录重来
@@ -1656,7 +1656,7 @@ jobs:
             } >> "$LOG_FILE"
             exit "$BUILD_STATUS"
 
-      # SPEC-001 R4: 从编译日志（含 `-- <NAME> version: <N> [<full>]`）提取真实版本号
+      # 从编译日志（含 `-- <NAME> version: <N> [<full>]`）提取真实版本号
       - name: 解析内核侧 KSU 版本
         id: ksu_version
         if: ${{ steps.compile_kernel.outcome == 'success' }}
