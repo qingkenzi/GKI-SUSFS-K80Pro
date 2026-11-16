@@ -7,27 +7,36 @@
 - [x] T4 写 `verify.py`（无依赖静态校验）
 
 ## 实现
-- [ ] T5 `build.yml`: ccache 步骤加 5.10/5.15 条件 + `mkdir ~/.cache/bazel` 独立
-- [ ] T6 `build.yml`: 缓存 key 去 sha、改 `hashFiles`
-- [ ] T7 `build.yml`: 新增「解析内核侧 KSU 版本」+ job/workflow_call outputs
-- [ ] T8 `build.yml`: `repo sync -j8`
-- [ ] T9 `get-manager.yml`: 新输入 `ksu_version` + 优先使用 + 跳过公式
-- [ ] T10 `get-manager.yml`: Release 资产优先路径 + 上传条件
-- [ ] T11 `k80pro.yml`: `concurrency` + 4 个 `timeout-minutes`
-- [ ] T12 `k80pro.yml`: `get-ksu-manager` 接 `needs` 与 `ksu_version`
-- [ ] T13 `k80pro.yml`: package `ref: github.sha` + `download-artifact` + manifest 修正
-- [ ] T14 删除 `zram/`、`susfs-probe.yml`、`deliver.yml`、`deliver_manager.yml`
-- [ ] T15 `use_zram` 描述标注 no-op（`k80pro.yml` + `kernel-custom.yml`）
+- [x] T5 T6 T7 T8 `build.yml`（ccache 条件、稳定缓存 key、ksu_version outputs、repo sync -j8）
+- [x] T9 T10 `get-manager.yml`（ksu_version 输入、Release 优先 + `/tags` 双路回退、上传条件）
+- [x] T11 T12 T13 `k80pro.yml`（concurrency、超时、github.sha 检出、download-artifact、manifest 修正）
+- [x] T14 删除 `zram/`、`susfs-probe.yml`、`deliver.yml`、`deliver_manager.yml`
+- [x] T15 `use_zram` 描述标注 no-op（两份入口）
 
 ## 验收
-- [ ] T16 `python3 specs/ci-hardening/verify.py` → AC1–AC9 全绿
-- [ ] T17 推送 `dev`，派发 run #1
-- [ ] T18 RC1: artifacts 含管理器 APK，versionCode ≤ 30000
-- [ ] T19 RC3: manifest `commit:` == run head sha，且含 `ksu_version:`
-- [ ] T20 派发 run #2，RC2: 日志出现 `Cache restored from key: bazel-`
-- [ ] T21 记录 run #1/#2 时长与基线 run `43846026297`（18 分钟）对比
+- [x] T16 `python3 specs/ci-hardening/verify.py` → AC1–AC9 全绿
+- [x] T17 推送 `dev`（`8951f8c` → `269fae2`），派发 run #1/#2/#3
+- [x] T18 RC1: run#2/#3 artifacts 含 `SukiSU-Manager(30000)`，APK sha256 `1f2b7a62…0049` = 官方 v3.0.0 包（≤ 30000）✔️
+- [x] T19 RC3: run#3 manifest `commit: 269fae2a…` == head sha，含 `ksu_version: v3.0.0-4bec532d@builtin` 与 `ksu_version_num: 30000` ✔️
+- [x] T20 RC2: run#3 日志 `Cache restored from key: bazel-6.6-v1`；run#2 曾出现旧 key `bazel-6.6-e69d58b9…`（hashFiles 版本，已按 D3 修正）✔️
+- [x] T21 时长对比（见下表）
+
+### 三次构建实测（同一内核源码 commit `612b333c…`）
+
+| run | commit | 缓存 key | bazel 耗时 | 全流程 | 备注 |
+|---|---|---|---|---|---|
+| 基线 `43846026297` | `017fff8`（旧流程） | `…-bazel-017fff8…`（sha）| 685 s | 18.2 min | 全部 Cache not found |
+| #1 `43890824595` | `8951f8c` | `…-hashFiles…` | 686 s | 18.2 min | **RC1 失败**：`/releases` 列表返回空 → 无 APK（触发 R5.1/D4 修正）|
+| #2 `43894962375` | `269fae2` | 恢复旧 key → 新存 `bazel-6.6-v1` | 1071 s | 23.6 min | RC1/RC3 通过；key 变更导致一次冷启动（D3 修正依据）|
+| #3 `43900435870` | `269fae2` | **`bazel-6.6-v1` 命中** | **656 s** | 18.7 min | 42 disk cache hit；RC1/RC2/RC3 全通过 |
+
+> **基线 vs 稳态**：688 s → 656 s，编译只快约 5%。原因：SukiSU 版本号不再由 CI 固定（改用上游 `builtin` 分支最新提交），每次 `Determining scmversion` 都变，Kleaf 里 284 个 internal action（核心是 `Building kernel`）无法跨构建复用。**结论：Kleaf 的编译瓶颈不在缓存命中，而在源码/版本输入漂移**；若追求极致提速，应固定 KSU 提交（与 `SukiSU(40548/40726)` 变体同样的固定提交机制），届时 disk cache 才能覆盖核心编译 action。当前提速收益主要体现在**可靠性**（APK 获取、可复现、超时、并发互斥、缓存不爆配额）。
 
 ## 交付物
 - `specs/ci-hardening/spec.md` / `plan.md` / `tasks.md` / `verify.py`
-- 3 个 workflow 的改动
-- 上述验收记录
+- 4 个 workflow 的改动 + `.yamllint.yml` + `INDEX.md` 更新
+- 3 次验收 run：`43890824595` / `43894962375` / `43900435870`
+
+## 当前产物（已推送 delivery）
+- boot.md5 `4e1d7ca5…`（run#3 manifest）；`ksu_version_num: 30000`；内核 `6.6.118-android15-8-g612b333c37908-ab10023517-4k`
+- 注意：手机上现已刷入 run `43846026297` 的产物（`g86e78ae454f85`），与 delivery 上最新的 run#3 不是同一份。两者同为 SukiSU v3.0.0 / SUSFS v2.4.0，但构建 commit 不同（内核 scmversion 每次变化）。如需对齐，可再刷一次 run#3 的产物。
