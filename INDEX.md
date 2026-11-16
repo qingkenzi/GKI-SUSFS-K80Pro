@@ -10,12 +10,12 @@
 
 | 分支 | 角色 | 文件数 | 体积 | 末端提交 |
 |---|---|---|---|---|
-| `dev`（默认） | 全部源码 / workflow / 网页 | 117 | 17.5 MB | `c5b82db0` 2026-11-16 |
+| `dev`（默认） | 全部源码 / workflow / 网页 | 104 | 2.3 MB | `e5e3051` 2026-11-17（移除 SDD 过程文档） |
 | `delivery` | 产物中转：编译好的 `boot.img.xz` | 4 | 10.9 MB | `a7b949a6` 2026-11-16（run 43846026297）|
 | `manager` | 产物中转：管理器 APK | 4 | 35.4 MB | `5ef09f8d` 2026-10-23（run 39971742387）|
 
 `delivery` / `manager` 都是 **orphan 分支**，每次构建 `git push -f` 整体覆盖，**不要在上面手改**（改了下次构建就没了）。
-GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两条产物分支占了 80%）。
+GitHub「体积」显示约 48 MB ≈ dev 2.3 + delivery 10.9 + manager 35.4（两条产物分支占了 96%）。
 
 ## 一、本仓新增的文件（上游没有）
 
@@ -54,7 +54,7 @@ GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两
 
 | 路径 | 文件数 | 体积 | 是什么 / 谁读它 |
 |---|---|---|---|
-| `.github/workflows/` | 17 | 0.22 MB | 见第四节 |
+| `.github/workflows/` | 14 | 0.22 MB | 见第四节 |
 | `.github/ISSUE_TEMPLATE/` | 2 | 2 KB | bug / feature 模板（上游）|
 | `ci/` | 5 | 0.01 MB | 见第一节，**仅 `k80pro.yml` / `package_only.yml` 读** |
 | `config/` | 9 | 1.01 MB | `stock_5.10/5.15/6.1/6.6/6.12.config` 各版本基线 + `config`（通用开关）+ `zram.config` + `SukiSU(40548|40726).config`；`build.yml` 用 `config/stock_${KVER}.config` |
@@ -64,8 +64,8 @@ GitHub「体积」显示 57 MB ≈ dev 17.5 + delivery 10.9 + manager 35.4（两
 | `security_patch/` | 10 | 34 KB | CVE-2026-43499：`apply_cve_2026_43499.sh` 总入口 + 4 个 rtmutex 版本补丁 + guards patch + `scoped_guard_*`；`build.yml` 在 `cve_2026_43499_patch=true` 时调用 |
 | `web/` | 36 | 0.26 MB | GitHub Pages 静态站（`index.html` / `guide.html` + `js/` + `scss/` + webpack）；`update-pages.yml` 部署 |
 | `zram/` | ~~10~~ | ~~0.27 MB~~ | **已删除**：死代码，`build.yml` 的 K80Pro-fix 早已跳过拷贝 |
-| `assets/` | 8 | 15.56 MB | 上游 README 的图片和 **2 个演示 mp4**（4.8 + 10.4 MB）；仓库体积大头 |
-| 根文件 | 7 | 0.03 MB | `README.md`（上游中文自述）/ `README-EN.md` / `LICENSE`（GPL-2.0）/ `CODE_OF_CONDUCT.md` / `.gitattributes` / `.gitignore` / `hmbird_patch.c` |
+| `assets/` | 6 | 0.42 MB | 6 张图片（`susfs_branch.png` / `susfs_commit.png` 被 `docs/advanced-features*.md` 引用）；**2 个演示 mp4（4.8 + 10.4 MB）已删除** |
+| 根文件 | 9 | 0.04 MB | `README.md`（上游中文自述）/ `README-EN.md` / `LICENSE`（GPL-2.0）/ `CODE_OF_CONDUCT.md` / `INDEX.md`（本文件）/ `.yamllint.yml` / `.gitattributes` / `.gitignore` / `hmbird_patch.c` |
 
 ## 四、14 个 workflow，按角色分四组
 
@@ -107,8 +107,8 @@ K80Pro 走 `k80pro.yml` / `kernel-custom.yml` → `build.yml` + `get-manager.yml
 1. **改 `build.yml` 前对齐哈希**：现行 `2035c4b3`，上游原版 `4d774ae5`。搜 `[K80Pro-fix]` 就能看到内核相关的唯一定制点。
 2. **`k80pro.yml` 与 `kernel-custom.yml` 的输入完全一样**：改默认值要两份一起改，否则两个入口行为不一致。
 3. **`assets/`、`web/`、`config/stock_*.config`、`docs/`、`scripts/` 全是上游的**：动它们会和上游同步冲突，能不改就不改。
-6. **`delivery` / `manager` 分支别手改**：force push，改了下次构建就没。
-7. **打包模板别手改**：`ci/boot_tpl.bin` 被改动 → `repack_boot_ci.py` 直接报错退出（模板坏 = 镜像不可启动）。要重做就用 `ci/make_template.py`。
+4. **`delivery` / `manager` 分支别手改**：force push，改了下次构建就没。
+5. **打包模板别手改**：`ci/boot_tpl.bin` 被改动 → `repack_boot_ci.py` 直接报错退出（模板坏 = 镜像不可启动）。要重做就用 `ci/make_template.py`。
 
 ## 七、改哪个文件会影响什么
 
