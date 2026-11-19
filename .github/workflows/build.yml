@@ -684,6 +684,46 @@ jobs:
             echo "KSU_LATEST_COMMIT_DATE=未知" >> $GITHUB_ENV
           fi
 
+      # KSU 版本号由上游在编译期用 `git rev-list --count main` 现算，只取决于克隆里
+      # main 分支的历史长度：镜像同步进度、clone 时刻都会让同一份代码拿到不同数字
+      # （实测同一提交出现过 30007 / 30041）。这里先补齐上游 main 的最新历史，再把
+      # 计数固定写进 Makefile/Kbuild，使版本号只随上游代码变化。
+      - name: 固定 KSU 版本计数
+        # 仅对跟随上游最新的 SukiSU 生效；SukiSU(40726)/(40548) 是固定老提交，
+        # 强行改计数会让它们谎报成新版本号。
+        if: inputs.ksu_mode != '禁用KSU' && inputs.ksu_variant == 'SukiSU'
+        working-directory: ${{ env.KERNEL_ROOT }}/KernelSU
+        run: |
+          git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main' || true
+
+          KSU_COMMIT_COUNT=""
+          for ref in origin/main main; do
+            if KSU_COMMIT_COUNT=$(git rev-list --count "$ref" 2>/dev/null) && [ -n "$KSU_COMMIT_COUNT" ]; then
+              break
+            fi
+            KSU_COMMIT_COUNT=""
+          done
+
+          if [ -z "$KSU_COMMIT_COUNT" ]; then
+            echo "::warning title=KSU 版本号未固定::取不到 main 分支历史，沿用上游默认计数（版本号可能随克隆漂移）"
+            exit 0
+          fi
+
+          PINNED=""
+          for f in kernel/Kbuild kernel/Makefile; do
+            [ -f "$f" ] || continue
+            grep -qE '^[[:space:]]*LOCAL_COUNT[[:space:]]*:=' "$f" || continue
+            sed -i -E "s|^[[:space:]]*LOCAL_COUNT[[:space:]]*:=.*$|LOCAL_COUNT     := ${KSU_COMMIT_COUNT}|" "$f"
+            PINNED="$PINNED $f"
+          done
+
+          echo "KSU_COMMIT_COUNT=$KSU_COMMIT_COUNT" >> "$GITHUB_ENV"
+          if [ -z "$PINNED" ]; then
+            echo "::warning title=KSU 版本号未固定::上游未使用 LOCAL_COUNT，沿用其自身版本规则"
+          else
+            echo "已按 main 提交数固定 KSU 版本计数: $KSU_COMMIT_COUNT（$PINNED）"
+          fi
+
       - name: 配置 SukiSU 管理器信息
         if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'SukiSU(40726)' || inputs.ksu_variant == 'SukiSU(40548)') && inputs.ksu_mode != '禁用KSU'
         working-directory: ${{ env.KERNEL_ROOT }}/KernelSU
@@ -1678,6 +1718,20 @@ jobs:
             fi
           fi
           echo "内核侧 KSU 版本: ${NUM:-未知} (${FULL:-未知})"
+
+          if [ -z "$NUM" ]; then
+            echo "::warning title=KSU 版本未知::未能从编译日志/Image 解析出 KSU 版本号"
+          else
+            if [ -n "${KSU_COMMIT_COUNT:-}" ]; then
+              echo "KSU 计数已固定为 ${KSU_COMMIT_COUNT}，编译产出 ${NUM}"
+            fi
+            BASELINE="${{ vars.KSU_VERSION_MIN }}"
+            if [[ -n "$BASELINE" && "$NUM" =~ ^[0-9]+$ && "$BASELINE" =~ ^[0-9]+$ ]]; then
+              if (( NUM < BASELINE )); then
+                echo "::warning title=KSU 版本低于基线::本次 ${NUM} < 基线 ${BASELINE}（仓库变量 KSU_VERSION_MIN），请确认 KSU 源码未被回退"
+              fi
+            fi
+          fi
           {
             echo "num=$NUM"
             echo "full=$FULL"
