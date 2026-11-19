@@ -55,6 +55,12 @@ on:
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
 
+      version_scope:
+        description: "构建范围（all=数据里全部月度 | latest=仅最新 | lts=仅LTS | 数字=最近N个）"
+        required: true
+        type: string
+        default: "all"
+
       # ==================== 文本输入 ====================
       version:
         description: "自定义版本名 (可选)"
@@ -163,6 +169,11 @@ on:
         required: false
         type: boolean
         default: false
+      version_scope:
+        description: "构建范围（all | latest | lts | 最近N个）"
+        required: false
+        type: string
+        default: "all"
       called_from_main:
         description: "是否从 main.yml 调用（内部使用）"
         required: false
@@ -175,22 +186,89 @@ on:
         default: false
 
 jobs:
+  # 矩阵由 data/<android>/<kernel>.json 动态生成：手写矩阵会随时间陈旧，
+  # 新发布的月度分支永远进不来（例如 2026-07 / 2026-10）
+  resolve-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      count: ${{ steps.gen.outputs.count }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 从版本数据生成矩阵
+        id: gen
+        env:
+          ANDROID_VERSION: android16
+          KERNEL_VERSION: "6.12"
+          VERSION_SCOPE: ${{ inputs.version_scope || 'all' }}
+          INCLUDE_LTS: "false"
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          android = os.environ["ANDROID_VERSION"]
+          kver = os.environ["KERNEL_VERSION"]
+          scope = os.environ["VERSION_SCOPE"].strip().lower()
+          include_lts = os.environ.get("INCLUDE_LTS", "true").lower() == "true"
+
+          data_path = Path("data") / android / (kver + ".json")
+          if not data_path.exists():
+              print(f"::error::未找到版本数据: {data_path}")
+              sys.exit(1)
+
+          data = json.loads(data_path.read_text(encoding="utf-8"))
+          entries = data.get("entries", [])
+          if not entries:
+              print(f"::error::{data_path} 没有版本数据")
+              sys.exit(1)
+
+          if scope in ("", "all"):
+              selected = entries
+          elif scope in ("latest", "1"):
+              selected = entries[-1:]
+          elif scope == "lts":
+              selected = []
+              include_lts = True
+          else:
+              try:
+                  limit = int(scope)
+              except ValueError:
+                  print(f"::error::无法解析 version_scope: {scope}（可用 all/latest/lts/数字）")
+                  sys.exit(1)
+              selected = entries[-limit:] if limit > 0 else entries
+
+          inc = [
+              {
+                  "sub_level": str(entry.get("kernel", "")).rsplit(".", 1)[-1],
+                  "os_patch_level": entry.get("date", ""),
+              }
+              for entry in selected
+          ]
+          if include_lts and data.get("lts") and not any(x["os_patch_level"] == "lts" for x in inc):
+              inc.append({"sub_level": "X", "os_patch_level": "lts"})
+
+          if not inc:
+              print("::error::没有可构建的版本，请检查 version_scope")
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps({"include": inc}, separators=(",", ":")) + "\n")
+              output.write("count=" + str(len(inc)) + "\n")
+
+          print(f"生成矩阵 {len(inc)} 项: " + ", ".join(f"{x['os_patch_level']}->{x['sub_level']}" for x in inc))
+          PY
+
   build-kernels-a16-6-12:
     name: "6.12.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
+    needs: resolve-matrix
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - sub_level: "23"
-            os_patch_level: "2025-06"
-          - sub_level: "30"
-            os_patch_level: "2025-07"
-          - sub_level: "38"
-            os_patch_level: "2025-09"
-          - sub_level: "58"
-            os_patch_level: "2025-12"
-          # - sub_level: "X"
-          #   os_patch_level: "lts"
+      matrix: ${{ fromJson(needs.resolve-matrix.outputs.matrix) }}
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
