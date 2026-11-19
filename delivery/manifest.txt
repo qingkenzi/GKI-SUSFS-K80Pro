@@ -1,0 +1,9 @@
+run_id:        44511799800
+commit:        c7756ab5f6cddc8177cad46c5147a04ace797699
+kernel:        6.6.143-android15-8-g3f3979a2ea01c-ab10000083-4k
+ksu_version:   v3.0.0-8c6c52a0@builtin
+ksu_version_num: 30043
+image_size:    38873600
+boot_md5:      45cc0dadc28a1122d1c981988b01e1dc
+boot_sha256:   ec6cada7d2454c96884e98dbe34f7f94f835beb1eee10d65bb6d604522e5e7a9
+built_at:      2026-11-19T11:29:32Z
